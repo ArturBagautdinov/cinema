@@ -1,0 +1,373 @@
+SELECT
+
+1. Количество просмотров для каждого пользователя
+SELECT
+    u.name,
+    (SELECT COUNT(*) FROM Cinema.Viewing v WHERE v.user_id = u.UniqueID) as view_count
+FROM Cinema.User u;
+
+2. Средний рейтинг для каждого фильма
+SELECT
+    m.title,
+    (SELECT AVG(r.rating) FROM Cinema.Review r WHERE r.movie_id = m.UniqueID) as avg_rating
+FROM Cinema.Movie m;
+
+3. Количество фильмов в каждом жанре
+SELECT
+    g.name,
+    (SELECT COUNT(*) FROM Cinema.MovieGenre mg WHERE mg.genre_id = g.UniqueID) as movie_count
+FROM Cinema.Genre g;
+
+FROM
+1. Пользователи с количеством аренд
+SELECT user_rentals.name, user_rentals.rental_count
+FROM (
+    SELECT u.name, COUNT(r.UniqueID) as rental_count
+    FROM Cinema.User u
+    LEFT JOIN Cinema.Rental r ON u.UniqueID = r.user_id
+    GROUP BY u.name
+) as user_rentals
+WHERE user_rentals.rental_count > 0;
+
+2. Фильмы с рейтингом выше среднего
+SELECT high_rated_movies.title, high_rated_movies.avg_rating
+FROM (
+    SELECT m.title, AVG(r.rating) as avg_rating
+    FROM Cinema.Movie m
+    JOIN Cinema.Review r ON m.UniqueID = r.movie_id
+    GROUP BY m.title
+    HAVING AVG(r.rating) > 7
+) as high_rated_movies;
+
+3. Актеры с количеством главных ролей
+SELECT actor_roles.actor_name, actor_roles.lead_roles_count
+FROM (
+    SELECT a.name as actor_name, COUNT(ma.movie_id) as lead_roles_count
+    FROM Cinema.Actor a
+    JOIN Cinema.MovieActor ma ON a.UniqueID = ma.actor_id
+    WHERE ma.is_lead_role = true
+    GROUP BY a.name
+) as actor_roles;
+
+WHERE
+
+1. Фильмы с рейтингом выше среднего
+SELECT title, release_year
+FROM Cinema.Movie
+WHERE UniqueID IN (
+    SELECT movie_id
+    FROM Cinema.Review
+    GROUP BY movie_id
+    HAVING AVG(rating) > (SELECT AVG(rating) FROM Cinema.Review)
+);
+
+2. Пользователи с активной подпиской
+SELECT name, email
+FROM Cinema.User
+WHERE UniqueID IN (
+    SELECT user_id
+    FROM Cinema.Subscription
+    WHERE status = 'active'
+);
+
+3. Фильмы определенного режиссера
+SELECT title, release_year
+FROM Cinema.Movie
+WHERE director_id = (
+    SELECT UniqueID
+    FROM Cinema.Director
+    WHERE name = 'Christopher Nolan'
+);
+
+HAVING
+
+1. Жанры с количеством фильмов больше среднего
+SELECT g.name, COUNT(mg.movie_id) as movie_count
+FROM Cinema.Genre g
+JOIN Cinema.MovieGenre mg ON g.UniqueID = mg.genre_id
+GROUP BY g.name
+HAVING COUNT(mg.movie_id) > (
+    SELECT AVG(genre_count)
+    FROM (
+        SELECT COUNT(movie_id) as genre_count
+        FROM Cinema.MovieGenre
+        GROUP BY genre_id
+    ) as counts
+);
+
+2. Пользователи с количеством просмотров выше среднего
+SELECT u.name, COUNT(v.UniqueID) as view_count
+FROM Cinema.User u
+JOIN Cinema.Viewing v ON u.UniqueID = v.user_id
+GROUP BY u.name
+HAVING COUNT(v.UniqueID) >= (
+    SELECT AVG(view_count)
+    FROM (
+        SELECT COUNT(UniqueID) as view_count
+        FROM Cinema.Viewing
+        GROUP BY user_id
+    ) as user_views
+);
+
+3. Фильмы со средним рейтингом выше общего среднего
+SELECT m.title, AVG(r.rating) as avg_rating
+FROM Cinema.Movie m
+JOIN Cinema.Review r ON m.UniqueID = r.movie_id
+GROUP BY m.title
+HAVING AVG(r.rating) > (SELECT AVG(rating) FROM Cinema.Review);
+
+ALL
+
+1. Фильмы с рейтингом выше всех фильмов определенного года
+SELECT title, release_year
+FROM Cinema.Movie
+WHERE UniqueID IN (
+    SELECT movie_id
+    FROM Cinema.Review
+    GROUP BY movie_id
+    HAVING AVG(rating) > ALL (
+        SELECT AVG(rating)
+        FROM Cinema.Review r2
+        JOIN Cinema.Movie m2 ON r2.movie_id = m2.UniqueID
+        WHERE m2.release_year = 2020
+        GROUP BY r2.movie_id
+    )
+);
+
+2. Пользователи с количеством аренд больше всех
+SELECT u.name, u.phone
+FROM Cinema.User u
+WHERE (
+    SELECT COUNT(*)
+    FROM Cinema.Rental r
+    WHERE r.user_id = u.UniqueID
+) >= ALL (
+    SELECT COUNT(*)
+    FROM Cinema.Rental r2
+    JOIN Cinema.User u2 ON r2.user_id = u2.UniqueID
+    GROUP BY u2.UniqueID
+);
+
+3. Актеры младше всех режиссеров
+SELECT name, birth_date
+FROM Cinema.Actor
+WHERE birth_date > ALL (
+    SELECT birth_date
+    FROM Cinema.Director
+    WHERE birth_date IS NOT NULL
+);
+
+IN
+
+1. Фильмы в определенных жанрах
+SELECT title, release_year
+FROM Cinema.Movie
+WHERE UniqueID IN (
+    SELECT movie_id
+    FROM Cinema.MovieGenre
+    WHERE genre_id IN (
+        SELECT UniqueID
+        FROM Cinema.Genre
+        WHERE name IN ('Sci-Fi', 'Adventure')
+    )
+);
+
+2. Пользователи из семейных групп
+SELECT name, email
+FROM Cinema.User
+WHERE UniqueID IN (
+    SELECT user_id
+    FROM Cinema.FamilyMember
+    WHERE family_group_id IN (
+        SELECT UniqueID
+        FROM Cinema.FamilyGroup
+        WHERE group_name LIKE '%Family%'
+    )
+);
+
+3. Режиссеры с фильмами после 2020 года
+SELECT name, country
+FROM Cinema.Director
+WHERE UniqueID IN (
+    SELECT director_id
+    FROM Cinema.Movie
+    WHERE release_year > 2020
+);
+
+ANY
+
+1. Фильмы с рейтингом лучше любого фильма определенного режиссера
+SELECT title, release_year
+FROM Cinema.Movie
+WHERE UniqueID IN (
+    SELECT movie_id
+    FROM Cinema.Review
+    GROUP BY movie_id
+    HAVING AVG(rating) > ANY (
+        SELECT AVG(rating)
+        FROM Cinema.Review r2
+        JOIN Cinema.Movie m2 ON r2.movie_id = m2.UniqueID
+        WHERE m2.director_id = 1
+        GROUP BY r2.movie_id
+    )
+);
+
+2. Актеры моложе любого режиссера
+SELECT name, birth_date
+FROM Cinema.Actor
+WHERE birth_date > ANY (
+    SELECT birth_date
+    FROM Cinema.Director
+    WHERE birth_date IS NOT NULL
+);
+
+3. Пользователи с подпиской дороже любой базовой
+SELECT name, email
+FROM Cinema.User
+WHERE UniqueID IN (
+    SELECT user_id
+    FROM Cinema.Subscription
+    WHERE price > ANY (
+        SELECT price
+        FROM Cinema.Subscription
+        WHERE plan_type = 'Basic'
+    )
+);
+
+EXISTS
+
+1. Пользователи с отзывами
+SELECT name, email
+FROM Cinema.User u
+WHERE EXISTS (
+    SELECT 1
+    FROM Cinema.Review r
+    WHERE r.user_id = u.UniqueID
+);
+
+2. Фильмы с главными ролями
+SELECT title, release_year
+FROM Cinema.Movie m
+WHERE EXISTS (
+    SELECT 1
+    FROM Cinema.MovieActor ma
+    WHERE ma.movie_id = m.UniqueID AND ma.is_lead_role = true
+);
+
+3. Режиссеры с фильмами в жанре "Sci-Fi"
+SELECT name, country
+FROM Cinema.Director d
+WHERE EXISTS (
+    SELECT 1
+    FROM Cinema.Movie m
+    JOIN Cinema.MovieGenre mg ON m.UniqueID = mg.movie_id
+    JOIN Cinema.Genre g ON mg.genre_id = g.UniqueID
+    WHERE m.director_id = d.UniqueID AND g.name = 'Sci-Fi'
+);
+
+Сравнение по нескольким столбцам
+
+1. Сравнение по роли и другим доступным полям
+SELECT u1.name, u1.role, u1.registrationDate
+FROM Cinema.User u1
+WHERE (u1.role, u1.registrationDate) = (
+    SELECT u2.role, u2.registrationDate
+    FROM Cinema.User u2
+    WHERE u2.name = 'Bob'
+);
+
+2. Фильмы того же года и жанра что и указанный фильм
+SELECT m1.title, m1.release_year, g.name
+FROM Cinema.Movie m1
+JOIN Cinema.MovieGenre mg1 ON m1.UniqueID = mg1.movie_id
+JOIN Cinema.Genre g ON mg1.genre_id = g.UniqueID
+WHERE (m1.release_year, mg1.genre_id) IN (
+    SELECT m2.release_year, mg2.genre_id
+    FROM Cinema.Movie m2
+    JOIN Cinema.MovieGenre mg2 ON m2.UniqueID = mg2.movie_id
+    WHERE m2.title = 'Интерстеллар'
+);
+
+3. Актеры с такой же датой рождения и страной как у режиссеров
+SELECT a.name, a.birth_date, a.country
+FROM Cinema.Actor a
+WHERE (a.birth_date, a.country) IN (
+    SELECT d.birth_date, d.country
+    FROM Cinema.Director d
+    WHERE d.birth_date IS NOT NULL
+);
+
+Коррелированные подзапросы
+
+1. Пользователи с количеством аренд выше или равным среднему по их роли
+SELECT u.name, u.role,
+       (SELECT COUNT(*)
+        FROM Cinema.Rental r
+        WHERE r.user_id = u.UniqueID) as rental_count
+FROM Cinema.User u
+WHERE (SELECT COUNT(*)
+       FROM Cinema.Rental r
+       WHERE r.user_id = u.UniqueID) >
+      (SELECT AVG(rental_count)
+       FROM (SELECT COUNT(*) as rental_count
+             FROM Cinema.Rental r2
+             JOIN Cinema.User u2 ON r2.user_id = u2.UniqueID
+             WHERE u2.role = u.role
+             GROUP BY r2.user_id) role_avg
+);
+
+ 2. Фильмы с рейтингом выше или равным среднему по их жанру
+ SELECT m.title, g.name as genre,
+        (SELECT AVG(r.rating)
+         FROM Cinema.Review r
+         WHERE r.movie_id = m.UniqueID) as avg_rating
+ FROM Cinema.Movie m
+ JOIN Cinema.MovieGenre mg ON m.UniqueID = mg.movie_id
+ JOIN Cinema.Genre g ON mg.genre_id = g.UniqueID
+ WHERE (SELECT AVG(r.rating)
+        FROM Cinema.Review r
+        WHERE r.movie_id = m.UniqueID) >= (
+     SELECT AVG(r2.rating)
+     FROM Cinema.Review r2
+     JOIN Cinema.MovieGenre mg2 ON r2.movie_id = mg2.movie_id
+     WHERE mg2.genre_id = mg.genre_id
+ );
+
+3. Актеры, которые были главными ролями в фильмах режиссеров их страны
+SELECT a.name, a.country,
+       (SELECT COUNT(*)
+        FROM Cinema.MovieActor ma
+        JOIN Cinema.Movie m ON ma.movie_id = m.UniqueID
+        WHERE ma.actor_id = a.UniqueID
+        AND m.director_id IN (
+            SELECT d.UniqueID
+            FROM Cinema.Director d
+            WHERE d.country = a.country
+        )) as movies_with_same_country_director
+FROM Cinema.Actor a
+WHERE EXISTS (
+    SELECT 1
+    FROM Cinema.MovieActor ma
+    JOIN Cinema.Movie m ON ma.movie_id = m.UniqueID
+    JOIN Cinema.Director d ON m.director_id = d.UniqueID
+    WHERE ma.actor_id = a.UniqueID
+    AND d.country = a.country
+    AND ma.is_lead_role = true
+);
+
+ 4. Пользователи, которые арендовали все фильмы определенного режиссера
+ SELECT u.name, u.email
+ FROM Cinema.User u
+ WHERE NOT EXISTS (
+     SELECT m.UniqueID
+     FROM Cinema.Movie m
+     WHERE m.director_id = (SELECT UniqueID
+                           FROM Cinema.Director
+                           WHERE name = 'Christopher Nolan')
+     AND NOT EXISTS (
+         SELECT r.UniqueID
+         FROM Cinema.Rental r
+         WHERE r.movie_id = m.UniqueID
+         AND r.user_id = u.UniqueID
+     )
+ );
