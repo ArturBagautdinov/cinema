@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: PgLab
+    environment:
+      POSTGRES_DB: CinemaMigr
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5444:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d CinemaMigr" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  flyway:
+    image: flyway/flyway:10
+    container_name: flyway_lab
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      -url=jdbc:postgresql://postgres:5432/CinemaMigr
+      -user=postgres
+      -password=postgres
+      -connectRetries=60
+      migrate
+    volumes:
+      - ./migrations:/flyway/sql
+
+volumes:
+  pgdata:
