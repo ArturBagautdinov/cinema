@@ -453,3 +453,67 @@ WHERE user_id = 1;
 <img width="1268" height="280" alt="Screenshot 2026-03-10 at 21 58 28" src="https://github.com/user-attachments/assets/0ba88ce7-fdbf-4a5a-bce5-2a41a29a997f" />
 Запрос будет ждать.
 
+## Очистка данных 
+
+Запрос для просмотра живых и удалённых строк:
+```sql
+SELECT
+    relname AS table_name,
+    n_live_tup AS live_rows,
+    n_dead_tup AS dead_rows
+FROM pg_stat_user_tables
+WHERE relname = 'review';
+```
+<img width="315" height="68" alt="Screenshot 2026-03-10 at 22 07 23" src="https://github.com/user-attachments/assets/de19d7e9-8c15-4477-a645-de03405154f9" /> <br>
+нет dead_rows <br>
+
+Добавим несколько строк:
+```sql
+INSERT INTO review (user_id, movie_id, rating, comment)
+SELECT
+    u.user_id,
+    m.movie_id,
+    (gs % 10) + 1,
+    'generated review ' || gs
+FROM generate_series(1,100) gs
+JOIN users u ON u.user_id = ((gs - 1) % (SELECT COUNT(*) FROM users)) + 1
+JOIN movie m ON m.movie_id = ((gs - 1) % (SELECT COUNT(*) FROM movie)) + 1
+ON CONFLICT (user_id, movie_id) DO NOTHING;
+```
+Проверим количество строк:
+```sql
+SELECT
+    relname AS table_name,
+    n_live_tup AS live_rows,
+    n_dead_tup AS dead_rows
+FROM pg_stat_user_tables
+WHERE relname = 'review';
+```
+<img width="313" height="70" alt="Screenshot 2026-03-10 at 22 13 43" src="https://github.com/user-attachments/assets/5dad8ba7-5387-4014-92a9-7b526ea48fd7" /> <br>
+новые живые строки добавились<br>
+Удалим часть данных:
+```sql
+DELETE FROM review
+WHERE comment LIKE 'generated review%'
+AND review_id % 2 = 0;
+```
+<img width="313" height="68" alt="Screenshot 2026-03-10 at 22 15 26" src="https://github.com/user-attachments/assets/8661e700-891f-43b5-a0fa-7945505a5436" /> <br>
+Удалённые строки физически ещё остаются в таблице, но становятся dead tuples. (столбец dead_rows) <br>
+
+Очистим таблицу<br>
+```sql
+VACUUM review;
+```
+Проверим снова <br>
+```sql
+SELECT
+    relname AS table_name,
+    n_live_tup AS live_rows,
+    n_dead_tup AS dead_rows
+FROM pg_stat_user_tables
+WHERE relname = 'review';
+```
+<img width="315" height="67" alt="Screenshot 2026-03-10 at 22 18 03" src="https://github.com/user-attachments/assets/51a7bf7f-b332-4f27-9ec4-ef03ce9398e4" /> <br>
+
+Команда VACUUM очистила устаревшие версии строк и освободила место в таблице.
+
