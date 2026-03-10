@@ -1,0 +1,80 @@
+pg_version_info:
+  query: |
+    SELECT
+      current_database() AS datname,
+      current_setting('server_version') AS version,
+      1 AS value
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - version:
+        usage: "LABEL"
+        description: "PostgreSQL server version"
+    - value:
+        usage: "GAUGE"
+        description: "Constant value for version panel"
+
+pg_active_sessions:
+  query: |
+    SELECT
+      current_database() AS datname,
+      count(*) AS active_sessions
+    FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND state = 'active'
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - active_sessions:
+        usage: "GAUGE"
+        description: "Number of active PostgreSQL sessions"
+
+pg_active_selects:
+  query: |
+    SELECT
+      current_database() AS datname,
+      count(*) AS active_selects
+    FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND state = 'active'
+      AND query ILIKE 'select%'
+      AND pid <> pg_backend_pid()
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - active_selects:
+        usage: "GAUGE"
+        description: "Number of currently active SELECT statements"
+
+pg_insert_activity:
+  query: |
+    SELECT
+      datname,
+      tup_inserted
+    FROM pg_stat_database
+    WHERE datname = current_database()
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - tup_inserted:
+        usage: "COUNTER"
+        description: "Number of inserted rows"
+
+pg_delete_activity:
+  query: |
+    SELECT
+      datname,
+      tup_deleted
+    FROM pg_stat_database
+    WHERE datname = current_database()
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - tup_deleted:
+        usage: "COUNTER"
+        description: "Number of deleted rows"
