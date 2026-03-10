@@ -1,0 +1,104 @@
+{
+  "id": 2,
+  "type": "timeseries",
+  "title": "Active sessions",
+  "gridPos": {
+    "x": 8,
+    "y": 0,
+    "h": 6,
+    "w": 8
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineInterpolation": "linear",
+        "barAlignment": 0,
+        "barWidthFactor": 0.6,
+        "lineWidth": 1,
+        "fillOpacity": 10,
+        "gradientMode": "none",
+        "spanNulls": false,
+        "insertNulls": false,
+        "showPoints": "auto",
+        "showValues": false,
+        "pointSize": 5,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        },
+        "axisPlacement": "auto",
+        "axisLabel": "",
+        "axisColorMode": "text",
+        "axisBorderShow": false,
+        "scaleDistribution": {
+          "type": "linear"
+        },
+        "axisCenteredZero": false,
+        "hideFrom": {
+          "tooltip": false,
+          "viz": false,
+          "legend": false
+        },
+        "thresholdsStyle": {
+          "mode": "off"
+        }
+      },
+      "color": {
+        "mode": "palette-classic"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "value": null,
+            "color": "green"
+          },
+          {
+            "value": 20,
+            "color": "orange"
+          },
+          {
+            "value": 50,
+            "color": "red"
+          }
+        ]
+      },
+      "unit": "short"
+    },
+    "overrides": []
+  },
+  "pluginVersion": "12.4.1",
+  "targets": [
+    {
+      "refId": "A",
+      "expr": "pg_stat_database_numbackends{datname=\"CinemaMigr\"}",
+      "range": true,
+      "instant": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "affkt5wubkyrkd"
+      },
+      "editorMode": "code",
+      "legendFormat": "{{instance}}"
+    }
+  ],
+  "datasource": {
+    "uid": "affkt5wubkyrkd",
+    "type": "prometheus"
+  },
+  "options": {
+    "tooltip": {
+      "mode": "single",
+      "sort": "none",
+      "hideZeros": false
+    },
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    }
+  }
+}
