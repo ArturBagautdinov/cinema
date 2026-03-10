@@ -129,4 +129,131 @@ HEAP_XMIN_COMMITTED - транзакция, которая создала стр
 HEAP_XMAX_INVALID - значение xmax невалидно, строка не была удалена или обновлена <br>
 HEAP_UPDATED - эта строка появилась в результате UPDATE предыдущей версии строки <br>
 
+## Посмотреть на параметры в разных транзакциях
+### Сценарий 1. Незакоммиченный UPDATE <br>
+Сессия 1:
+```sql
+BEGIN;
 
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE comment = 'review updated #1';
+```
+<img width="508" height="67" alt="Screenshot 2026-03-10 at 20 41 27" src="https://github.com/user-attachments/assets/94619a69-7c00-4bf8-b153-8c464a126527" />
+
+Теперь обновим: <br>
+```sql
+UPDATE review
+SET comment = 'review updated #2'
+WHERE comment = 'review updated #1';
+```
+Проверим в этой же транзакции:
+```sql
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE comment = 'review updated #2';
+```
+<img width="506" height="69" alt="Screenshot 2026-03-10 at 20 43 13" src="https://github.com/user-attachments/assets/eb247711-4c8f-4dea-bc0d-f56849103e34" />
+
+Сессия 1 видит новую версию строки, созданную её же транзакцией. <br>
+
+Сессия 2:
+Пока Сессия 1 не сделала COMMIT, запускаем:
+```sql
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE review_id = 1;
+```
+<img width="508" height="67" alt="Screenshot 2026-03-10 at 20 45 58" src="https://github.com/user-attachments/assets/db661d93-22db-441d-b597-c9d1cbf1c361" />
+
+Сессия 2 видит старую зафиксированную версию, то есть: <br>
+ещё старый comment ("review updated #1") <br>
+старый xmin ("843") <br>
+есть xmax ("844") <br>
+старый ctid ("(4060,24)") <br>
+Это и есть работа MVCC: разные транзакции видят разные версии строки. <br>
+
+Теперь в Сессии 1:
+```sql
+COMMIT;
+```
+После этого в Сессии 2 повторяем:
+
+```sql
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE review_id = 1;
+```
+<img width="507" height="67" alt="Screenshot 2026-03-10 at 20 49 28" src="https://github.com/user-attachments/assets/9a1e90c5-daa6-40f4-a2d9-5c6ebcb65b3a" /> <br>
+Теперь Сессия 2 уже увидит новую версию строки.
+
+### Сценарий 2. UPDATE и ROLLBACK
+
+Сессия 1: <br>
+Начинаем новую транзакцию:
+```sql
+BEGIN;
+
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE review_id = 250202;
+```
+Сейчас строка имеет значение: comment = 'review updated #2', xmin = 844
+<img width="506" height="69" alt="Screenshot 2026-03-10 at 20 57 11" src="https://github.com/user-attachments/assets/36de3bc4-8772-4270-8b45-7897c84dbca2" />
+Теперь выполняем обновление:
+```sql
+UPDATE review
+SET comment = 'review rollback test'
+WHERE review_id = 250202;
+```
+Проверяем в этой же транзакции:
+```sql
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE review_id = 250202;
+```
+<img width="510" height="71" alt="Screenshot 2026-03-10 at 20 59 09" src="https://github.com/user-attachments/assets/6f7daaca-0cd8-4ac5-8b83-00aee22d4fdf" />
+
+Результат в Сессии 1: <br>
+comment = "review rollback test" <br>
+появился новый xmin <br>
+изменился ctid <br>
+Это означает, что была создана новая версия строки внутри транзакции. <br>
+
+Сессия 2: <br>
+Пока Сессия 1 не сделала COMMIT, выполняем:
+```sql
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE review_id = 250202;
+```
+<img width="507" height="69" alt="Screenshot 2026-03-10 at 21 01 04" src="https://github.com/user-attachments/assets/28e59246-5b75-4b6a-948d-2b2e445dbd8e" />
+
+Результат: <br>
+comment = "review updated #2" <br>
+старый xmin <br>
+старый ctid <br>
+То есть Сессия 2 не видит незакоммиченные изменения. <br>
+
+Теперь в Сессии 1 <br>
+Отменяем транзакцию:<br>
+```sql
+ROLLBACK;
+```
+
+Сессия 2<br>
+Теперь снова выполняем:<br>
+```sql
+SELECT review_id, rating, comment, xmin, xmax, ctid
+FROM review
+WHERE review_id = 250202;
+```
+<img width="507" height="67" alt="Screenshot 2026-03-10 at 21 03 11" src="https://github.com/user-attachments/assets/4a801910-7d4d-48b5-a576-9d21708b3a69" />
+
+Результат:<br>
+comment остаётся "review updated #2"<br>
+xmin и ctid не изменились<br>
+Это означает, что обновление из Сессии 1 было полностью отменено.<br>
+
+Вывод: Внутри транзакции была создана новая версия строки, но после выполнения ROLLBACK эта версия была удалена системой, так как транзакция не была зафиксирована. <br>
+Другие транзакции продолжали видеть старую зафиксированную версию строки.
