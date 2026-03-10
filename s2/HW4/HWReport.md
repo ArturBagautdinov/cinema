@@ -5,12 +5,45 @@
 
 ```sql
 
+INSERT INTO users(name, role_id, email)
+SELECT 'Test User', role_id, 'test_user@example.com'
+FROM user_role
+WHERE role_name = 'USER'
+ON CONFLICT (email) DO NOTHING;
+
 INSERT INTO review(user_id, movie_id, rating, comment)
 SELECT u.user_id, m.movie_id, 7, 'initial review'
 FROM users u
 JOIN movie m ON m.title = 'Test Movie'
 WHERE u.email = 'test_user@example.com'
 ON CONFLICT (user_id, movie_id) DO NOTHING;
+
+INSERT INTO director(name, birth_date, country_id, biography)
+SELECT 'Test Director', DATE '1980-01-01', country_id, 'bio'
+FROM country
+WHERE country_name = 'USA'
+AND NOT EXISTS (
+    SELECT 1 FROM director WHERE name = 'Test Director'
+);
+
+INSERT INTO movie(title, description, release_year, duration, age_rating_id, language_id, country_id, director_id)
+SELECT
+    'Test Movie',
+    'Movie for xmin/xmax demo',
+    2024,
+    120,
+    ar.age_rating_id,
+    l.language_id,
+    c.country_id,
+    d.director_id
+FROM age_rating ar
+JOIN language l ON l.language_name = 'English'
+JOIN country c ON c.country_name = 'USA'
+JOIN director d ON d.name = 'Test Director'
+WHERE ar.age_rating = 'PG-13'
+AND NOT EXISTS (
+    SELECT 1 FROM movie WHERE title = 'Test Movie'
+);
 
 ```
 ### xmin, xmax, ctid
@@ -257,3 +290,44 @@ xmin и ctid не изменились<br>
 
 Вывод: Внутри транзакции была создана новая версия строки, но после выполнения ROLLBACK эта версия была удалена системой, так как транзакция не была зафиксирована. <br>
 Другие транзакции продолжали видеть старую зафиксированную версию строки.
+
+
+## Смоделировать дедлок, описать результаты
+Сессия 1:
+```sql
+BEGIN;
+
+UPDATE users
+SET name = 'Deadlock User 1 - tx1'
+WHERE user_id = 100002;
+```
+Сессия 2:
+```sql
+BEGIN;
+
+UPDATE users
+SET name = 'Deadlock User 2 - tx2'
+WHERE user_id = 100003;
+```
+Теперь Сессия 2 держит блокировку строки user_id = 100003 <br>
+Дальше выполняем:
+```sql
+UPDATE users
+SET name = 'Deadlock User 1 - tx2'
+WHERE user_id = 100002;
+```
+Этот запрос зависнет, потому что строку user_id = 10 уже держит Сессия 1.<br>
+
+Теперь запускаем второй запрос из Сессии 1:
+```sql
+UPDATE users
+SET name = 'Deadlock User 2 - tx1'
+WHERE user_id = 100003;
+```
+Теперь получится цикл: <br>
+Сессия 1 ждёт строку user_id = 11, которую держит Сессия 2 <br>
+Сессия 2 ждёт строку user_id = 10, которую держит Сессия 1 <br>
+PostgreSQL обнаружил deadlock между двумя транзакциями и принудительно прервал одну из них. <br>
+
+<img width="647" height="208" alt="Screenshot 2026-03-10 at 21 22 55" src="https://github.com/user-attachments/assets/f64c76e0-1211-4784-9619-086d5747a84c" />
+
