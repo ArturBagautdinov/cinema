@@ -1,0 +1,57 @@
+{
+  "id": 1,
+  "type": "table",
+  "title": "PostgreSQL version",
+  "gridPos": {
+    "x": 0,
+    "y": 0,
+    "h": 6,
+    "w": 8
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "align": "auto",
+        "footer": {
+          "reducers": []
+        },
+        "cellOptions": {
+          "type": "auto"
+        },
+        "inspect": false
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "value": null,
+            "color": "green"
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "pluginVersion": "12.4.1",
+  "targets": [
+    {
+      "refId": "A",
+      "datasource": {
+        "uid": "bffkta5se9hq8a",
+        "type": "grafana-postgresql-datasource"
+      },
+      "format": "table",
+      "rawSql": "SELECT current_setting('server_version') AS version;",
+      "editorMode": "code"
+    }
+  ],
+  "datasource": {
+    "uid": "bffkta5se9hq8a",
+    "type": "grafana-postgresql-datasource"
+  },
+  "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+  }
+}
