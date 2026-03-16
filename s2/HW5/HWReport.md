@@ -99,7 +99,6 @@ SELECT pg_current_wal_lsn() AS lsn_after_bulk;
 
 ### полный dump БД
 <img width="705" height="548" alt="Screenshot 2026-03-16 at 23 05 20" src="https://github.com/user-attachments/assets/d83f8802-c133-4780-a8a0-a627301afc20" />
-<img width="1017" height="428" alt="Screenshot 2026-03-17 at 00 12 08" src="https://github.com/user-attachments/assets/9a3e784c-f1ea-437e-9127-dabe1c4605dc" />
 <img width="1512" height="982" alt="Screenshot 2026-03-16 at 23 29 51" src="https://github.com/user-attachments/assets/eda1e7fb-e54c-4ded-8842-7889e444ff4e" />
 <img width="1512" height="982" alt="Screenshot 2026-03-16 at 23 44 12" src="https://github.com/user-attachments/assets/70cbe894-c20b-4b56-88e7-c41e6991c627" />
 
