@@ -111,3 +111,169 @@ SELECT pg_current_wal_lsn() AS lsn_after_bulk;
 <img width="1512" height="982" alt="Screenshot 2026-03-17 at 00 01 06" src="https://github.com/user-attachments/assets/9600c11d-e7ea-4d03-b452-d7d4e40db3ba" />
 <img width="1512" height="982" alt="Screenshot 2026-03-17 at 00 01 40" src="https://github.com/user-attachments/assets/ca48c1b2-c048-43e7-8885-c4028c1ceef5" />
 <img width="1512" height="982" alt="Screenshot 2026-03-17 at 00 02 01" src="https://github.com/user-attachments/assets/a0ffe910-bc27-4c86-86dd-9c535936a3ae" />
+
+
+## Создание нескольких seed и проверка идемпотентности seed (ON CONFLICT)
+
+### Seed базовых справочников системы
+
+```sql
+-- USER ROLES
+INSERT INTO user_role (role_name)
+VALUES 
+    ('ADMIN'),
+    ('USER'),
+    ('KID')
+ON CONFLICT (role_name) DO NOTHING;
+
+-- SUBSCRIPTION STATUS
+INSERT INTO subscription_status (status_name)
+VALUES 
+    ('ACTIVE'),
+    ('PAUSED'),
+    ('CANCELLED')
+ON CONFLICT (status_name) DO NOTHING;
+
+-- PAYMENT METHODS
+INSERT INTO payment_method (method_name)
+VALUES 
+    ('CARD'),
+    ('PAYPAL'),
+    ('APPLEPAY')
+ON CONFLICT (method_name) DO NOTHING;
+
+-- COUNTRIES
+INSERT INTO country (country_name)
+VALUES 
+    ('USA'),
+    ('UK'),
+    ('DE')
+ON CONFLICT (country_name) DO NOTHING;
+
+-- GENRES
+INSERT INTO genre (name, description)
+VALUES 
+    ('Drama', ''),
+    ('Comedy', ''),
+    ('Action', '')
+ON CONFLICT (name) DO NOTHING;
+```
+<img width="1512" height="982" alt="Screenshot 2026-03-17 at 11 04 11" src="https://github.com/user-attachments/assets/639188f8-6afe-496e-ae50-47e9187b48e2" />
+Команды INSERT используют конструкции ON CONFLICT DO NOTHING, что обеспечивает идемпотентность - при повторном запуске дубликаты данных не создаются, ошибки уникальности не возникают, состояние базы остаётся корректным.
+
+### Seed тестовых бизнес-данных
+```sql
+-- DIRECTORS
+INSERT INTO director (name, birth_date, country_id)
+SELECT 
+    'Christopher Nolan',
+    '1970-07-30',
+    c.country_id
+FROM country c
+WHERE c.country_name = 'UK'
+ON CONFLICT DO NOTHING;
+
+-- ACTORS
+INSERT INTO actor (name, birth_date, country_id)
+SELECT 
+    'Leonardo DiCaprio',
+    '1974-11-11',
+    c.country_id
+FROM country c
+WHERE c.country_name = 'USA'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO actor (name, birth_date, country_id)
+SELECT 
+    'Matthew McConaughey',
+    '1969-11-04',
+    c.country_id
+FROM country c
+WHERE c.country_name = 'USA'
+ON CONFLICT DO NOTHING;
+
+-- MOVIES
+INSERT INTO movie (title, description, release_year, duration, director_id, country_id, language_id)
+SELECT 
+    'Inception',
+    'Dream inside a dream',
+    2010,
+    148,
+    d.director_id,
+    c.country_id,
+    l.language_id
+FROM director d, country c, language l
+WHERE d.name = 'Christopher Nolan'
+  AND c.country_name = 'USA'
+  AND l.language_name = 'English'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO movie (title, description, release_year, duration, director_id, country_id, language_id)
+SELECT 
+    'Interstellar',
+    'Space exploration',
+    2014,
+    169,
+    d.director_id,
+    c.country_id,
+    l.language_id
+FROM director d, country c, language l
+WHERE d.name = 'Christopher Nolan'
+  AND c.country_name = 'USA'
+  AND l.language_name = 'English'
+ON CONFLICT DO NOTHING;
+
+-- MOVIE_GENRE
+INSERT INTO movie_genre (movie_id, genre_id)
+SELECT m.movie_id, g.genre_id
+FROM movie m, genre g
+WHERE m.title = 'Inception'
+  AND g.name = 'Sci-Fi'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO movie_genre (movie_id, genre_id)
+SELECT m.movie_id, g.genre_id
+FROM movie m, genre g
+WHERE m.title = 'Interstellar'
+  AND g.name = 'Sci-Fi'
+ON CONFLICT DO NOTHING;
+
+-- MOVIE_ACTOR
+INSERT INTO movie_actor (movie_id, actor_id, character_name)
+SELECT m.movie_id, a.actor_id, 'Cobb'
+FROM movie m, actor a
+WHERE m.title = 'Inception'
+  AND a.name = 'Leonardo DiCaprio'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO movie_actor (movie_id, actor_id, character_name)
+SELECT m.movie_id, a.actor_id, 'Cooper'
+FROM movie m, actor a
+WHERE m.title = 'Interstellar'
+  AND a.name = 'Matthew McConaughey'
+ON CONFLICT DO NOTHING;
+
+-- USERS
+INSERT INTO users (name, role_id, email)
+SELECT 
+    'Movie Fan',
+    r.role_id,
+    'fan@example.com'
+FROM user_role r
+WHERE r.role_name = 'USER'
+ON CONFLICT (email) DO NOTHING;
+
+-- REVIEW
+INSERT INTO review (user_id, movie_id, rating, comment)
+SELECT 
+    u.user_id,
+    m.movie_id,
+    9,
+    'Amazing movie!'
+FROM users u, movie m
+WHERE u.email = 'fan@example.com'
+  AND m.title = 'Inception'
+ON CONFLICT (user_id, movie_id) DO NOTHING;
+```
+<img width="1512" height="982" alt="Screenshot 2026-03-17 at 11 09 49" src="https://github.com/user-attachments/assets/e6fa90ce-4b49-4e82-a145-9516404e42d9" />
+Аналогично, использование ON CONFLICT, скрипт корректно выполняется при повторном запуске без создания дубликатов.
