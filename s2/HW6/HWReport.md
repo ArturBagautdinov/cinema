@@ -42,11 +42,13 @@ docker exec -it PgReplica2 psql -U postgres -d CinemaMigr -c "SELECT viewing_id,
 
 ### Что произойдет если попробовать вставить данные на реплике
 Попытка записи на replica1:
+
 ```bash
 docker exec -it PgReplica1 psql -U postgres -d CinemaMigr -c "INSERT INTO viewing (user_id, movie_id, progress, device) VALUES (1, 1, 50, 'write_on_replica');"
 ```
 <img width="1506" height="62" alt="Screenshot 2026-03-23 at 16 17 50" src="https://github.com/user-attachments/assets/8204e88c-4e38-4f28-92d8-298125cccd7b" />
 Попытка записи на replica2:
+
 ```bash
 docker exec -it PgReplica2 psql -U postgres -d CinemaMigr -c "INSERT INTO viewing (user_id, movie_id, progress, device) VALUES (1, 1, 60, 'write_on_replica');"
 ```
@@ -99,7 +101,163 @@ WAL был полностью применен <br>
 задержка практически исчезла <br>
 система вернулась к согласованному состоянию <br>
 
+## Настроить Logical replication
+### Подготовка publisher на primary
+Создание тестовых таблиц без PK:
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+CREATE TABLE IF NOT EXISTS lr_test (
+    id BIGINT PRIMARY KEY,
+    value TEXT
+);
+CREATE TABLE IF NOT EXISTS lr_no_pk (
+    id BIGINT,
+    value TEXT
+);
+"
+```
+Добавление тестовых данных:
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+INSERT INTO lr_test (id, value) VALUES (1, 'first row')
+ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO lr_no_pk (id, value) VALUES (1, 'row without pk');
+"
+```
+Создание publication:
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+DROP PUBLICATION IF EXISTS cinema_pub;
+CREATE PUBLICATION cinema_pub FOR TABLE lr_test, lr_no_pk;
+"
+```
+### Подготовка subscriber
+
+Создание таблиц на subscriber:
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "
+CREATE TABLE IF NOT EXISTS lr_test (
+    id BIGINT PRIMARY KEY,
+    value TEXT
+);
+CREATE TABLE IF NOT EXISTS lr_no_pk (
+    id BIGINT,
+    value TEXT
+);
+"
+```
+Создание Subscription:
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "
+DROP SUBSCRIPTION IF EXISTS cinema_sub;
+CREATE SUBSCRIPTION cinema_sub
+CONNECTION 'host=postgres-primary port=5444 dbname=CinemaMigr user=replicator password=pass'
+PUBLICATION cinema_pub;
+"
+```
+### Данные реплицируются
+
+Primary - вставка строки:
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+INSERT INTO lr_test (id, value) VALUES (2, 'replicated row');
+"
+```
+<img width="570" height="71" alt="Screenshot 2026-03-23 at 17 47 01" src="https://github.com/user-attachments/assets/d460ff5f-07ef-4efb-99d8-eb05193859da" />
+
+Проверка у subscriber:
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "
+SELECT * FROM lr_test ORDER BY id;
+"
+```
+<img width="775" height="118" alt="Screenshot 2026-03-23 at 17 57 11" src="https://github.com/user-attachments/assets/64671548-b5f7-4445-9e58-6ba27526d12c" />
+
+Строка появилась у subscriber, значит logical replication по PUBLICATION/SUBSCRIPTION работает.
+
+### DDL не реплицируется
+измение схемы у primary:
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+ALTER TABLE lr_test ADD COLUMN note TEXT;
+"
+```
+<img width="767" height="65" alt="Screenshot 2026-03-23 at 18 00 43" src="https://github.com/user-attachments/assets/dd4d2baf-b733-4ad2-b77f-114a97bcad6b" /> <br>
+
+Проверка схемы у subscriber:
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'lr_test';
+"
+```
+<img width="780" height="155" alt="Screenshot 2026-03-23 at 18 06 42" src="https://github.com/user-attachments/assets/ca16b3a4-d915-463f-9fb2-60c840a803c5" /> <br>
+У subscriber столбца note нет. <br>
+logical replication реплицирует данные, но не DDL.
+
+### Проверку REPLICA IDENTITY
+Попробовать UPDATE на primary для таблицы без PK
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+UPDATE lr_no_pk
+SET value = 'updated without pk'
+WHERE id = 1;
+"
+```
+<img width="757" height="103" alt="Screenshot 2026-03-23 at 18 13 45" src="https://github.com/user-attachments/assets/322582a7-d09f-421d-b071-958776c4a69b" /> <br>
+subscriber не понимает, какую именно строку обновлять, если у таблицы нет PK и не задана replica identity. <br>
+
+Чтобы исправь это: <br>
+На primary задать replica identity full
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+ALTER TABLE lr_no_pk REPLICA IDENTITY FULL;
+"
+```
+Снова UPDATE:
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+UPDATE lr_no_pk
+SET value = 'updated after replica identity'
+WHERE id = 1;
+"
+```
+<img width="756" height="87" alt="Screenshot 2026-03-23 at 18 15 50" src="https://github.com/user-attachments/assets/a21c5618-94f2-4dd7-a747-ee8bc132859c" /> <br>
+Проверка у subscriber:
+
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "
+SELECT * FROM lr_no_pk;
+"
+```
+<img width="781" height="108" alt="Screenshot 2026-03-23 at 18 16 44" src="https://github.com/user-attachments/assets/bd2f1864-7978-44c2-91f5-bffb2819101d" /> <br>
+UPDATE произошел
+
+### Проверку replication status
+У publisher:
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "
+SELECT pid, usename, application_name, client_addr, state
+FROM pg_stat_replication;
+"
+```
+<img width="767" height="152" alt="Screenshot 2026-03-23 at 18 19 01" src="https://github.com/user-attachments/assets/98bbaf80-6057-46ca-8f3e-e4336a57b14c" />
+
+У subscriber:
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "
+SELECT subname, pid, received_lsn, latest_end_lsn, latest_end_time
+FROM pg_stat_subscription;
+"
+```
+<img width="789" height="125" alt="Screenshot 2026-03-23 at 18 20 46" src="https://github.com/user-attachments/assets/5845ed4e-21fd-42d6-bdff-29298f6268e1" />
+
+Подписка активна, есть pid
+
+### Как могут пригодится pg_dump/pg_restore для Logical replication
+Для logical replication pg_dump и pg_restore полезны прежде всего для переноса схемы и первоначальной подготовки подписчика, так как publication/subscription реплицируют изменения данных, но не изменения структуры. Поэтому dump/restore можно использовать для начального разворачивания таблиц, индексов и других объектов схемы, а logical replication — для дальнейшей синхронизации строк.
 
 
 
