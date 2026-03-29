@@ -258,6 +258,120 @@ Standby-сервер (реплика) просто воспроизводит з
 Поэтому говорят, что физическая репликация “не знает” про секции:
 она копирует физические изменения базы данных, а логика секционирования выполняется только на primary.
 
+## Логическая репликация и секционирование publish_via_partition_root = on / off
 
+Подготовка таблицы на logical subscriber - здесь делаем такую же секционированную таблицу на PgLogicalSub:
+```bash
+docker exec -i PgLogicalSub psql -U postgres -d CinemaMigr <<'SQL'
+DROP TABLE IF EXISTS viewing_range CASCADE;
 
+CREATE TABLE viewing_range
+(
+    viewing_id   BIGINT,
+    user_id      BIGINT      NOT NULL,
+    movie_id     BIGINT      NOT NULL,
+    viewing_date TIMESTAMPTZ NOT NULL,
+    progress     INT         NOT NULL,
+    device       TEXT,
+    session_id   UUID        NOT NULL,
+    tags         TEXT[],
+    meta         JSONB,
+    geo          POINT
+) PARTITION BY RANGE (viewing_date);
+
+CREATE TABLE viewing_range_2025_03 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-03-01') TO ('2025-04-01');
+CREATE TABLE viewing_range_2025_04 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-04-01') TO ('2025-05-01');
+CREATE TABLE viewing_range_2025_05 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-05-01') TO ('2025-06-01');
+CREATE TABLE viewing_range_2025_06 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-06-01') TO ('2025-07-01');
+CREATE TABLE viewing_range_2025_07 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-07-01') TO ('2025-08-01');
+CREATE TABLE viewing_range_2025_08 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-08-01') TO ('2025-09-01');
+CREATE TABLE viewing_range_2025_09 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-09-01') TO ('2025-10-01');
+CREATE TABLE viewing_range_2025_10 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-10-01') TO ('2025-11-01');
+CREATE TABLE viewing_range_2025_11 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-11-01') TO ('2025-12-01');
+CREATE TABLE viewing_range_2025_12 PARTITION OF viewing_range
+FOR VALUES FROM ('2025-12-01') TO ('2026-01-01');
+CREATE TABLE viewing_range_2026_01 PARTITION OF viewing_range
+FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+CREATE TABLE viewing_range_2026_02 PARTITION OF viewing_range
+FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+CREATE TABLE viewing_range_2026_03 PARTITION OF viewing_range
+FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
+SQL
+```
+### Создать publication с publish_via_partition_root = off
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "CREATE PUBLICATION pub_viewing_off FOR TABLE viewing_range WITH (publish_via_partition_root = false);"
+```
+Создать subscription
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "CREATE SUBSCRIPTION sub_viewing_off CONNECTION 'host=postgres-primary port=5432 dbname=CinemaMigr user=postgres password=postgres' PUBLICATION pub_viewing_off WITH (copy_data = false);"
+```
+
+Вставить тестовую строку на publisher
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "INSERT INTO viewing_range (viewing_id, user_id, movie_id, viewing_date, progress, device, session_id) VALUES (700000001, 1, 1, '2025-11-10 12:00:00+00', 80, 'TV', gen_random_uuid());"
+```
+
+Проверить на subscriber
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "SELECT tableoid::regclass AS actual_table, viewing_id, user_id, movie_id, viewing_date FROM viewing_range WHERE viewing_id = 700000001;"
+```
+<img width="1512" height="101" alt="Screenshot 2026-03-29 at 23 25 49" src="https://github.com/user-attachments/assets/20195507-e2c6-47e3-9275-cf7daaeb0821" />
+
+При publish_via_partition_root = off изменения секционированной таблицы передаются подписчику от имени конкретных партиций (actual_table = viewing_range_2025_11). Поэтому на подписчике должны существовать соответствующие таблицы/секции. В примере строка с датой 2025-11-10 была применена в секцию viewing_range_2025_11
+
+### publication с publish_via_partition_root = on
+
+На subscriber создаем обычную таблицу viewing_range
+
+``` bash
+docker exec -i PgLogicalSub psql -U postgres -d CinemaMigr <<'SQL'
+DROP TABLE IF EXISTS viewing_range CASCADE;
+
+CREATE TABLE viewing_range
+(
+    viewing_id   BIGINT,
+    user_id      BIGINT      NOT NULL,
+    movie_id     BIGINT      NOT NULL,
+    viewing_date TIMESTAMPTZ NOT NULL,
+    progress     INT         NOT NULL,
+    device       TEXT,
+    session_id   UUID        NOT NULL,
+    tags         TEXT[],
+    meta         JSONB,
+    geo          POINT
+);
+SQL
+```
+
+Создать publication с on
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "CREATE PUBLICATION pub_viewing_on FOR TABLE viewing_range WITH (publish_via_partition_root = true);"
+```
+
+Создать Subscription
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "CREATE SUBSCRIPTION sub_viewing_on CONNECTION 'host=postgres-primary port=5432 dbname=CinemaMigr user=postgres password=postgres' PUBLICATION pub_viewing_on WITH (copy_data = false);"
+```
+
+Вставить тестовую строку на Publisher
+```bash
+docker exec -it PgPrimary psql -U postgres -d CinemaMigr -c "INSERT INTO viewing_range (viewing_id, user_id, movie_id, viewing_date, progress, device, session_id) VALUES (700000002, 2, 2, '2025-11-15 18:30:00+00', 55, 'WEB', gen_random_uuid());"
+```
+Проверить у Subscriber
+```bash
+docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "SELECT viewing_id, user_id, movie_id, viewing_date, device FROM viewing_range WHERE viewing_id = 700000002;"
+```
+<img width="1511" height="96" alt="Screenshot 2026-03-29 at 23 34 49" src="https://github.com/user-attachments/assets/1a851468-24ae-4a48-bcd5-92709689ca65" />
+
+При publish_via_partition_root = on изменения секционированной таблицы передаются подписчику через корневую таблицу, а не через отдельные секции. Поэтому на подписчике структура может отличаться: в примере на publisher использовалась секционированная таблица viewing_range, а на subscriber данные успешно применялись в обычную таблицу viewing_range без секционирования.
 
