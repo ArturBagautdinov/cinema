@@ -375,3 +375,173 @@ docker exec -it PgLogicalSub psql -U postgres -d CinemaMigr -c "SELECT viewing_i
 
 При publish_via_partition_root = on изменения секционированной таблицы передаются подписчику через корневую таблицу, а не через отдельные секции. Поэтому на подписчике структура может отличаться: в примере на publisher использовалась секционированная таблица viewing_range, а на subscriber данные успешно применялись в обычную таблицу viewing_range без секционирования.
 
+## Шардирование через postgres_fdw
+
+```yaml
+  postgres-shard1:
+    image: postgres:16
+    container_name: PgShard1
+    environment:
+      POSTGRES_DB: CinemaMigr
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5448:5432"
+    volumes:
+      - pgdata_shard1:/var/lib/postgresql/data
+
+  postgres-shard2:
+    image: postgres:16
+    container_name: PgShard2
+    environment:
+      POSTGRES_DB: CinemaMigr
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5449:5432"
+    volumes:
+      - pgdata_shard2:/var/lib/postgresql/data
+
+  postgres-router:
+    image: postgres:16
+    container_name: PgRouter
+    environment:
+      POSTGRES_DB: CinemaMigr
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5450:5432"
+    volumes:
+      - pgdata_router:/var/lib/postgresql/data
+```
+Tаблицы на шардах <br>
+Шардирование users по user_id: <br>
+shard1: user_id < 50000 <br>
+shard2: user_id >= 50000 <br>
+
+shard1
+```bash
+docker exec -i PgShard1 psql -U postgres -d CinemaMigr <<'SQL'
+DROP TABLE IF EXISTS users_shard CASCADE;
+
+CREATE TABLE users_shard
+(
+    user_id            BIGINT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    role_id            BIGINT NOT NULL,
+    email              TEXT NOT NULL,
+    registration_date  TIMESTAMPTZ NOT NULL,
+    CHECK (user_id < 50000)
+);
+
+INSERT INTO users_shard VALUES
+(1, 'User 1', 1, 'user1@mail.test', now()),
+(42, 'User 42', 1, 'user42@mail.test', now()),
+(1000, 'User 1000', 2, 'user1000@mail.test', now());
+SQL
+```
+
+shard2
+```bash
+docker exec -i PgShard2 psql -U postgres -d CinemaMigr <<'SQL'
+DROP TABLE IF EXISTS users_shard CASCADE;
+
+CREATE TABLE users_shard
+(
+    user_id            BIGINT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    role_id            BIGINT NOT NULL,
+    email              TEXT NOT NULL,
+    registration_date  TIMESTAMPTZ NOT NULL,
+    CHECK (user_id >= 50000)
+);
+
+INSERT INTO users_shard VALUES
+(50000, 'User 50000', 1, 'user50000@mail.test', now()),
+(70000, 'User 70000', 2, 'user70000@mail.test', now()),
+(99999, 'User 99999', 1, 'user99999@mail.test', now());
+SQL
+```
+
+Настройка router через postgres_fdw
+```bash
+docker exec -i PgRouter psql -U postgres -d CinemaMigr <<'SQL'
+CREATE EXTENSION IF NOT EXISTS postgres_fdw;
+
+DROP SERVER IF EXISTS shard1_srv CASCADE;
+DROP SERVER IF EXISTS shard2_srv CASCADE;
+
+CREATE SERVER shard1_srv
+FOREIGN DATA WRAPPER postgres_fdw
+OPTIONS (host 'postgres-shard1', port '5432', dbname 'CinemaMigr');
+
+CREATE SERVER shard2_srv
+FOREIGN DATA WRAPPER postgres_fdw
+OPTIONS (host 'postgres-shard2', port '5432', dbname 'CinemaMigr');
+
+CREATE USER MAPPING FOR postgres
+SERVER shard1_srv
+OPTIONS (user 'postgres', password 'postgres');
+
+CREATE USER MAPPING FOR postgres
+SERVER shard2_srv
+OPTIONS (user 'postgres', password 'postgres');
+SQL
+```
+Создание на router одной общей таблицы-шины и 2 foreign partition
+```bash
+docker exec -i PgRouter psql -U postgres -d CinemaMigr <<'SQL'
+DROP TABLE IF EXISTS users_router CASCADE;
+
+CREATE TABLE users_router
+(
+    user_id            BIGINT NOT NULL,
+    name               TEXT NOT NULL,
+    role_id            BIGINT NOT NULL,
+    email              TEXT NOT NULL,
+    registration_date  TIMESTAMPTZ NOT NULL
+) PARTITION BY RANGE (user_id);
+
+CREATE FOREIGN TABLE users_router_shard1
+PARTITION OF users_router
+FOR VALUES FROM (MINVALUE) TO (50000)
+SERVER shard1_srv
+OPTIONS (schema_name 'public', table_name 'users_shard');
+
+CREATE FOREIGN TABLE users_router_shard2
+PARTITION OF users_router
+FOR VALUES FROM (50000) TO (MAXVALUE)
+SERVER shard2_srv
+OPTIONS (schema_name 'public', table_name 'users_shard');
+SQL
+```
+Проверка, что router видит все данные
+```bash
+docker exec -it PgRouter psql -U postgres -d CinemaMigr -c "SELECT * FROM users_router ORDER BY user_id;"
+```
+<img width="1062" height="153" alt="Screenshot 2026-03-29 at 23 50 42" src="https://github.com/user-attachments/assets/df55902b-09e8-4fb4-a6bc-2d10469dd550" />
+6 строк из двух шардов
+
+### Простой запрос на все данные
+
+```bash
+docker exec -it PgRouter psql -U postgres -d CinemaMigr -c "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM users_router ORDER BY user_id;"
+```
+<img width="1370" height="170" alt="Screenshot 2026-03-29 at 23 58 46" src="https://github.com/user-attachments/assets/56f0edb7-5cb7-4a95-b9d4-0490f18b51a2" />
+
+Используются оба шарда: `Foreign Scan on public.users_router_shard1` и `Foreign Scan on public.users_router_shard2` <br>
+В плане есть объединение результатов с обоих шардов — `Append` <br>
+На каждый шард отправляется свой удалённый запрос
+Router обращается к обоим шардам, потому что запрос `SELECT * FROM users_router ORDER BY user_id` требует получить все данные из распределённой таблицы
+
+### Простой запрос на шард
+
+```bash
+docker exec -it PgRouter psql -U postgres -d CinemaMigr -c "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM users_router WHERE user_id = 42;"
+```
+<img width="1269" height="147" alt="Screenshot 2026-03-30 at 00 00 39" src="https://github.com/user-attachments/assets/b3eac22e-10e7-42e0-a9d8-ce6b61f3a250" />
+Используется только один шард: `Foreign Scan on users_router_shard1 users_router` <br>
+Второй шард в плане отсутствует, значит лишние шарды были отброшены на этапе планирования <br>
+Router обращается только к одному шарду, потому что условие `WHERE user_id = 42` попадает только в диапазон `users_router_shard1`
+
+
