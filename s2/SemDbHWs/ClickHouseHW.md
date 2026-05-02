@@ -178,11 +178,132 @@ FROM generate_series(1, 1000000) AS n;
 
 <img width="867" height="286" alt="Screenshot 2026-05-02 at 20 07 55" src="https://github.com/user-attachments/assets/420b0e64-43fb-460e-9b6b-5010415628b1" />
 
+### Запросы
 
+1. Продажи за последний месяц
 
+ClickHouse
 
+```sql
+docker exec -it clickhouse-lab clickhouse-client --password password --query "
+SELECT
+    count() AS sales_count,
+    round(sum(quantity * price), 2) AS total_revenue
+FROM sales_ch
+WHERE sale_date >= addMonths((SELECT max(sale_date) FROM sales_ch), -1);
+"
+```
 
+<img width="939" height="139" alt="Screenshot 2026-05-02 at 20 48 42" src="https://github.com/user-attachments/assets/db32b619-242f-4923-a45f-9fe1d2ca8b8f" />
 
+Postgres
 
+```sql
+docker exec -it postgres-lab psql -U postgres -d postgres -c "
+SELECT
+    count(*) AS sales_count,
+    round(sum(quantity * price)::numeric, 2) AS total_revenue
+FROM sales_pg
+WHERE sale_date >= (SELECT max(sale_date) FROM sales_pg) - interval '1 month';
+"
+```
 
+<img width="836" height="197" alt="Screenshot 2026-05-02 at 20 49 55" src="https://github.com/user-attachments/assets/9ff08b20-ccf5-47e9-8ac4-1f0fbe84137b" />
 
+Замер скорости запроса “продажи за последний месяц”
+
+ClickHouse
+
+```bash
+time docker exec -i clickhouse-lab clickhouse-client --password password --query "
+SELECT
+    category,
+    count() AS sales_count,
+    round(sum(quantity * price), 2) AS total_revenue
+FROM sales_ch
+WHERE sale_date >= addMonths((SELECT max(sale_date) FROM sales_ch), -1)
+GROUP BY category
+ORDER BY total_revenue DESC;
+"
+```
+
+<img width="958" height="243" alt="Screenshot 2026-05-02 at 20 51 32" src="https://github.com/user-attachments/assets/4a68fe5e-34f2-4c72-a826-8d6de8e32dcb" />
+
+Postgres
+
+<img width="872" height="302" alt="Screenshot 2026-05-02 at 20 52 11" src="https://github.com/user-attachments/assets/719707c8-3b0f-4586-9403-9429f22c18d7" />
+
+Размер данных
+
+ClickHouse
+
+```bash
+docker exec -it clickhouse-lab clickhouse-client --password password --query "
+SELECT
+    table,
+    formatReadableSize(sum(bytes_on_disk)) AS size_on_disk,
+    formatReadableSize(sum(data_compressed_bytes)) AS compressed_size,
+    formatReadableSize(sum(data_uncompressed_bytes)) AS uncompressed_size,
+    round(sum(data_uncompressed_bytes) / sum(data_compressed_bytes), 2) AS compression_ratio
+FROM system.parts
+WHERE database = 'default'
+  AND table = 'sales_ch'
+  AND active
+GROUP BY table;
+"
+```
+
+<img width="955" height="225" alt="Screenshot 2026-05-02 at 20 53 35" src="https://github.com/user-attachments/assets/e2e26307-9de5-4c58-b595-e75262e1d81e" />
+
+Postgres
+
+```bash
+docker exec -it postgres-lab psql -U postgres -d postgres -c "
+SELECT
+    pg_size_pretty(pg_total_relation_size('sales_pg')) AS total_size,
+    pg_size_pretty(pg_relation_size('sales_pg')) AS table_size,
+    pg_size_pretty(pg_indexes_size('sales_pg')) AS indexes_size;
+"
+```
+
+<img width="846" height="183" alt="Screenshot 2026-05-02 at 20 54 30" src="https://github.com/user-attachments/assets/a668ebc2-2e99-431c-8419-a387f3d8cbff" />
+
+## Ответьте на вопросы:
+
+### 1. Какая СУБД быстрее вставила 1 млн строк?
+
+Быстрее вставку 1 млн строк выполняет ClickHouse (ClickHouse - 0.168, Postgres - 1.867). Он оптимизирован под массовую загрузку и аналитическую обработку больших объёмов данных. PostgreSQL вставляет данные медленнее, особенно потому что для таблицы созданы индексы idx_sales_pg_date и idx_sales_pg_product, которые также нужно обновлять при вставке. 
+
+### 2. Во сколько раз ClickHouse сжал данные эффективнее?
+
+ClickHouse - 14,88 MB
+
+Postgres - 102 MB
+
+ClickHouse сжал данные в 6,85 раз эффективнее
+
+### 3. Какой вывод можно сделать о выборе СУБД для аналитики?
+
+Для аналитики лучше подходит ClickHouse, потому что он:
+
+- быстрее обрабатывает большие объёмы данных;
+- эффективнее выполняет агрегации;
+- лучше сжимает данные;
+- хорошо подходит для логов, событий, метрик и продаж;
+- оптимизирован под OLAP-нагрузку.
+
+PostgreSQL лучше использовать для приложений, где важны транзакции, обновления, удаления, связи между таблицами и целостность данных.
+
+### 4. Разница ClickHouse и PostgreSQL
+
+**ClickHouse** — колоночная СУБД для аналитики. Она быстро обрабатывает большие объёмы данных, хорошо сжимает данные и эффективно выполняет запросы с `COUNT`, `SUM`, `AVG`, `GROUP BY`. Подходит для логов, метрик, статистики и отчётов.
+
+**PostgreSQL** — реляционная строчная СУБД для транзакционных приложений. Она хорошо подходит для сайтов, CRM, интернет-магазинов и систем, где часто используются `INSERT`, `UPDATE`, `DELETE`, связи между таблицами и транзакции.
+
+ClickHouse лучше использовать для аналитики и больших данных, а PostgreSQL — для обычных приложений и транзакционной обработки.
+
+## Задние 3
+
+Потыкаться в http://localhost:8123, посмотреть dashboard
+
+<img width="1506" height="774" alt="Screenshot 2026-05-02 at 21 09 12" src="https://github.com/user-attachments/assets/8a78659e-b4f8-4faf-8331-b267c5e8f356" />
