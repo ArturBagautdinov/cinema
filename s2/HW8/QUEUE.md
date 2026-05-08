@@ -546,14 +546,161 @@ LIMIT 10;
 
 ## Дополнительно (за пару баллов)
 
-Механизм Retry: Если задача завершилась ошибкой, воркер должен увеличить счетчик attempts и перенести scheduled_at на 5 минут в будущее (exponential backoff).
+Изменения в коде:
 
-Оптимизация (Notify): Вместо постоянного опроса базы (polling) раз в секунду, используйте механизм LISTEN / NOTIFY, чтобы продьюсер «будил» консьюмеров при появлении новой задачи.
+```java
+NOTIFY tasks_channel, 'new_task'
+```
 
-Борьба с Bloat: Настройте агрессивный autovacuum для таблицы очереди или запустите ручной VACUUM ANALYZE во время теста, чтобы увидеть, как «раздувание» таблицы влияет на время выборки задач.
+Producer вставляет задачу и отправляет уведомление worker-ам.
 
+Worker теперь:
 
+1. Worker сначала пытается взять задачу.
 
+2. Если задач нет, он ждёт NOTIFY.
 
+3. Если задача упала:
+   - attempts увеличивается;
+   - scheduled_at переносится в будущее;
+   - status снова становится READY.
 
+4. Если attempts достиг max_attempts:
+   - задача становится FAILED.
 
+Код прикреплен отдельно в папке HW8
+
+### Механизм Retry: Если задача завершилась ошибкой, воркер должен увеличить счетчик attempts и перенести scheduled_at на 5 минут в будущее (exponential backoff).
+
+Проверека Retry:
+
+```sql
+SELECT
+    task_id,
+    priority,
+    status,
+    attempts,
+    max_attempts,
+    scheduled_at,
+    last_error
+FROM tasks
+WHERE attempts > 0
+ORDER BY updated_at DESC
+LIMIT 20;
+```
+
+<img width="872" height="546" alt="Screenshot 2026-05-08 at 22 03 54" src="https://github.com/user-attachments/assets/733148f5-dbdf-470f-9370-22be7a1971b2" />
+
+задача упала,
+
+attempts увеличился,
+
+задача вернулась в READY,
+
+но scheduled_at перенесён в будущее
+
+Окончательно упавшие задачи:
+
+```sql
+SELECT
+    task_id,
+    priority,
+    status,
+    attempts,
+    max_attempts,
+    completed_at,
+    last_error
+FROM tasks
+WHERE status = 'FAILED'
+ORDER BY completed_at DESC
+LIMIT 20;
+```
+
+<img width="839" height="293" alt="Screenshot 2026-05-08 at 22 05 19" src="https://github.com/user-attachments/assets/431ffa31-ab82-41e9-bc07-47912e2ddbb3" />
+
+Задачи достигли max_attempts, она стали: FAILED
+
+### Оптимизация (Notify): Вместо постоянного опроса базы (polling) раз в секунду, используйте механизм LISTEN / NOTIFY, чтобы продьюсер «будил» консьюмеров при появлении новой задачи.
+
+Когда задач нет, Worker ожидает таски (раз в секунду проверяет):
+
+<img width="410" height="198" alt="Screenshot 2026-05-08 at 22 31 34" src="https://github.com/user-attachments/assets/de52a495-a1f8-4cee-a6c6-06de2740fd0e" />
+
+Когда task появился Producer шлет Notify и worker его получает:
+
+<img width="485" height="73" alt="Screenshot 2026-05-08 at 22 32 57" src="https://github.com/user-attachments/assets/9b28aff4-c39b-4924-bf14-a0fa5c43a046" />
+
+Также для проверки можно вручную отправить Notify:
+
+```sql
+NOTIFY tasks_channel, 'manual_test';
+```
+
+<img width="505" height="25" alt="Screenshot 2026-05-08 at 22 34 52" src="https://github.com/user-attachments/assets/d8cb1c95-9167-4223-8c83-3e61df607b6c" />
+
+И Worker'ы его получили
+
+### Борьба с Bloat: Настройте агрессивный autovacuum для таблицы очереди или запустите ручной VACUUM ANALYZE во время теста, чтобы увидеть, как «раздувание» таблицы влияет на время выборки задач.
+
+Autovacuum для таблицы tasks:
+
+```sql
+ALTER TABLE tasks SET (
+    autovacuum_enabled = true,
+    autovacuum_vacuum_scale_factor = 0.01,
+    autovacuum_vacuum_threshold = 50,
+    autovacuum_analyze_scale_factor = 0.01,
+    autovacuum_analyze_threshold = 50
+);
+```
+
+PostgreSQL будет запускать autovacuum уже примерно после изменения 1% таблицы.
+
+Даже если таблица маленькая, autovacuum может сработать после 50 изменённых строк.
+
+До Больших нагрузок:
+
+```
+SELECT
+    relname,
+    n_live_tup,
+    n_dead_tup,
+    last_vacuum,
+    last_autovacuum,
+    last_analyze,
+    last_autoanalyze
+FROM pg_stat_user_tables
+WHERE relname = 'tasks';
+```
+
+<img width="605" height="189" alt="Screenshot 2026-05-08 at 23 01 43" src="https://github.com/user-attachments/assets/ad6aa46e-ecbb-40ee-8172-5187c1e0c4b3" />
+
+```
+EXPLAIN ANALYZE
+SELECT task_id
+FROM tasks
+WHERE status = 'READY'
+  AND scheduled_at <= now()
+ORDER BY priority DESC, scheduled_at ASC, created_at ASC, task_id ASC
+LIMIT 1;
+```
+
+<img width="1028" height="236" alt="Screenshot 2026-05-08 at 23 02 28" src="https://github.com/user-attachments/assets/2c6ca429-b5a0-49ec-a39f-1aa55f8122bc" />
+
+После нагрузки:
+
+<img width="951" height="252" alt="Screenshot 2026-05-08 at 23 13 48" src="https://github.com/user-attachments/assets/5b6ec843-89f3-42f8-9cb6-a373448c4fb8" />
+
+<img width="1066" height="240" alt="Screenshot 2026-05-08 at 23 13 27" src="https://github.com/user-attachments/assets/a5342ec1-edcd-4099-9a50-ca6643d51616" />
+
+При раздувании таблицы Execution time значительно увеличивается - было: 0,029, Стало: 0,529.
+
+Выполним VACUUM:
+
+```sql
+VACUUM ANALYZE tasks;
+```
+
+<img width="1219" height="485" alt="Screenshot 2026-05-08 at 23 20 17" src="https://github.com/user-attachments/assets/d8145faa-e087-4737-98a5-7b925748055a" />
+
+Execution time уменьшился
