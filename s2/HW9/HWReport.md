@@ -466,7 +466,127 @@ CREATE INDEX ix_fact_user_actions_timestamp
 
 ## 6. Написать минимум 3 аналитических запроса
 
+Запрос 1. Динамика активности по дням
 
+Показывает, сколько действий каждого типа было по дням.
 
+```sql
+SELECT
+    dd.date_value,
+    dat.action_type,
+    COUNT(*) AS actions_count
+FROM olap.fact_user_actions fua
+JOIN olap.dim_date dd 
+    ON fua.date_id = dd.date_id
+JOIN olap.dim_action_type dat 
+    ON fua.action_type_key = dat.action_type_key
+GROUP BY
+    dd.date_value,
+    dat.action_type
+ORDER BY
+    dd.date_value,
+    dat.action_type;
+```
+
+<img width="400" height="951" alt="Screenshot 2026-05-17 at 12 04 34" src="https://github.com/user-attachments/assets/7f96bef2-e10d-4696-8697-f8620679c495" />
+<br>
+<img width="410" height="659" alt="Screenshot 2026-05-17 at 12 07 33" src="https://github.com/user-attachments/assets/5d447e23-6edd-4514-bb67-89dbe455fa38" />
+
+Запрос 2. Самые популярные фильмы 
+
+Популярность считается по количеству всех действий с фильмом.
+
+```
+SELECT
+    dm.movie_id,
+    dm.title,
+    dm.release_year,
+    dm.genres,
+    COUNT(*) AS total_actions,
+    COUNT(*) FILTER (WHERE dat.action_type = 'VIEWING') AS views_count,
+    COUNT(*) FILTER (WHERE dat.action_type = 'PURCHASE') AS purchases_count,
+    COUNT(*) FILTER (WHERE dat.action_type = 'RENTAL') AS rentals_count,
+    COUNT(*) FILTER (WHERE dat.action_type = 'REVIEW') AS reviews_count,
+    COALESCE(SUM(fua.revenue), 0) AS total_revenue,
+    ROUND(AVG(fua.rating), 2) AS avg_rating
+FROM olap.fact_user_actions fua
+JOIN olap.dim_movie dm 
+    ON fua.movie_key = dm.movie_key
+JOIN olap.dim_action_type dat 
+    ON fua.action_type_key = dat.action_type_key
+GROUP BY
+    dm.movie_id,
+    dm.title,
+    dm.release_year,
+    dm.genres
+ORDER BY
+    total_actions DESC
+LIMIT 20;
+```
+
+<img width="1239" height="699" alt="Screenshot 2026-05-17 at 12 12 14" src="https://github.com/user-attachments/assets/c5ff6cfa-f391-4808-8bf0-ecacd88e8a9b" />
+
+Запрос 3. Активность пользователей
+
+Показывает, сколько действий совершил каждый пользователь и сколько денег он принес.
+
+```sql
+SELECT
+    du.user_id,
+    du.user_name,
+    du.role_name,
+    COUNT(*) AS total_actions,
+    COUNT(*) FILTER (WHERE dat.action_type = 'VIEWING') AS views_count,
+    COUNT(*) FILTER (WHERE dat.action_type = 'PURCHASE') AS purchases_count,
+    COUNT(*) FILTER (WHERE dat.action_type = 'RENTAL') AS rentals_count,
+    COUNT(*) FILTER (WHERE dat.action_type = 'REVIEW') AS reviews_count,
+    COALESCE(SUM(fua.revenue), 0) AS total_revenue,
+    ROUND(AVG(fua.progress), 2) AS avg_view_progress,
+    ROUND(AVG(fua.rating), 2) AS avg_user_rating
+FROM olap.fact_user_actions fua
+JOIN olap.dim_user du 
+    ON fua.user_key = du.user_key
+JOIN olap.dim_action_type dat 
+    ON fua.action_type_key = dat.action_type_key
+GROUP BY
+    du.user_id,
+    du.user_name,
+    du.role_name
+ORDER BY
+    total_actions DESC
+LIMIT 20;
+```
+
+<img width="1213" height="679" alt="Screenshot 2026-05-17 at 12 13 46" src="https://github.com/user-attachments/assets/4ed360fa-deff-4ea6-898c-c4ad458d2542" />
+
+Запрос 4. Выручка по месяцам и типам платных действий
+
+Покупки и аренды дают деньги, через них анализируется выручка.
+
+```sql
+SELECT
+    dd.year,
+    dd.month,
+    dat.action_type,
+    COUNT(*) AS paid_actions_count,
+    SUM(fua.revenue) AS total_revenue,
+    ROUND(AVG(fua.revenue), 2) AS avg_revenue
+FROM olap.fact_user_actions fua
+JOIN olap.dim_date dd 
+    ON fua.date_id = dd.date_id
+JOIN olap.dim_action_type dat 
+    ON fua.action_type_key = dat.action_type_key
+WHERE fua.revenue IS NOT NULL
+GROUP BY
+    dd.year,
+    dd.month,
+    dat.action_type
+ORDER BY
+    dd.year,
+    dd.month,
+    dat.action_type;
+```
+
+<img width="596" height="716" alt="Screenshot 2026-05-17 at 12 15 59" src="https://github.com/user-attachments/assets/f1cbf46c-af0a-4fee-b1c6-d53d5da4de46" />
 
 
